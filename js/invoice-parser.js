@@ -149,8 +149,8 @@ export function foldDiscountRows(rows, discount = 'merge') {
       target.amount = round2((target.amount || 0) + (r.amount || 0));
       target.tax = round2((target.tax || 0) + (r.tax || 0));
       target.total = round2(target.amount + target.tax);
+      // 单价保留发票原值（折扣只抵金额/税额），不用净额反推
       if (target.qty) {
-        target.price = Number((target.amount / target.qty).toFixed(8));
         target.priceIncl = Number((target.total / target.qty).toFixed(8));
       }
     } else {
