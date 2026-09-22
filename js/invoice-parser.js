@@ -149,9 +149,11 @@ export function foldDiscountRows(rows, discount = 'merge') {
       target.amount = round2((target.amount || 0) + (r.amount || 0));
       target.tax = round2((target.tax || 0) + (r.tax || 0));
       target.total = round2(target.amount + target.tax);
-      // 单价保留发票原值（折扣只抵金额/税额），不用净额反推
+      // 单价 = 税费和折扣都算进去的单价（含税折后单价 = 价税合计净额 ÷ 数量）
       if (target.qty) {
-        target.priceIncl = Number((target.total / target.qty).toFixed(8));
+        const p = Number((target.total / target.qty).toFixed(8));
+        target.price = p;
+        target.priceIncl = p;
       }
     } else {
       out.push(r);
