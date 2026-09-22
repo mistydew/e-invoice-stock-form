@@ -1,0 +1,75 @@
+{
+  "name": "invoice-stock-form",
+  "productName": "发票入库单助手",
+  "version": "1.0.0",
+  "description": "电子发票批量识别，自动按供货单位生成元器件入库单 Excel",
+  "author": "mistydew",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node scripts/build-win.mjs",
+    "icon": "node scripts/gen-icon.mjs"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.mistydew.invoice-stock-form",
+    "productName": "发票入库单助手",
+    "copyright": "© 2026 mistydew",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "index.html",
+      "css/**",
+      "js/**",
+      "lib/**",
+      "icons/**",
+      "electron/**",
+      "manifest.webmanifest",
+      "sw.js",
+      "package.json"
+    ],
+    "win": {
+      "icon": "electron/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "发票入库单助手",
+      "runAfterFinish": true,
+      "artifactName": "发票入库单助手-安装版-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "发票入库单助手-便携版-${version}.exe"
+    },
+    "npmRebuild": false,
+    "electronLanguages": [
+      "zh-CN"
+    ]
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

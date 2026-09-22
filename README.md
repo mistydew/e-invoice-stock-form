@@ -97,13 +97,32 @@ git push -u origin main
 
 > 注意：`.gitignore` 已排除 `发票-工大抬头.zip`、`入库单汇总.xlsx`、`_samples/`、`_dev/` 等**真实发票数据**，不会被上传。如你自己部署，请同样确认不要把发票样本提交到公开仓库。
 
-## 后续做电脑 / 手机 App
+## Windows 桌面版（exe）
 
-网页版已是 PWA（可安装、可离线）。打包成独立 App 的推荐路线：
+桌面版与网页版功能完全一致（Electron 封装），生成结果走系统「另存为」对话框。到
+**[Releases](https://github.com/mistydew/e-invoice-stock-form/releases)** 下载：
 
-- **Capacitor**（同一套代码）：`npx cap add windows/android/ios`，直接复用本项目前端，可上架或分发安装包；
-- 或 **Tauri / Electron**（桌面端）打包；
-- 纯手机快捷方式：浏览器“添加到主屏幕”已可用，无需额外开发。
+| 版本 | 文件 | 说明 |
+|---|---|---|
+| 安装版 | `发票入库单助手-安装版-x.x.x.exe` | 标准安装向导（当前用户安装、免管理员），自动创建 桌面/开始菜单 快捷方式 |
+| 便携版 | `发票入库单助手-便携版-x.x.x.exe` | 单文件绿色版，拷到 U 盘即用，不写系统 |
+
+> 文件未做代码签名，Windows SmartScreen 首次运行可能提示「更多信息 → 仍要运行」，属正常现象。
+
+### 本地构建 exe
+
+```bash
+npm install          # 安装 electron / electron-builder（首次需下载运行时）
+npm run dist         # 一键产出 dist-win/ 下的 安装版 + 便携版
+```
+
+构建脚本（`scripts/build-win.mjs`）流程：打包应用目录 → 用内置 rcedit 注入图标/版本信息 → 打包安装版与便携版。
+图标由 `npm run icon` 生成（`electron/icon.ico`）。`electron/rcedit-ia32.exe` 为 MS-PL 许可的开源资源编辑工具。
+
+### 手机 App（后续）
+
+网页版已是 PWA（手机浏览器「添加到主屏幕」即可当 App 用）。需要独立安装包时用
+**Capacitor** 复用同一套代码打包 Android/iOS，无需重写。
 
 ## 项目结构
 

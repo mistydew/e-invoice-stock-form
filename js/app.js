@@ -237,6 +237,11 @@ $('btn-gen').addEventListener('click', async () => {
 });
 
 function download(blob, name) {
+  // 桌面版（Electron）走系统“另存为”对话框
+  if (window.desktop && window.desktop.saveFile) {
+    blob.arrayBuffer().then((buf) => window.desktop.saveFile(name, new Uint8Array(buf)));
+    return;
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
