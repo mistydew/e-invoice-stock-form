@@ -1,0 +1,13 @@
+# 真实票据数据（隐私，禁止提交）
+_samples/
+_dev/
+发票-工大抬头.zip
+入库单汇总.xlsx
+*.xlsx
+*.zip
+*.ofd
+
+# 系统
+Thumbs.db
+.DS_Store
+node_modules/

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>电子发票 → 元器件入库单 · 批量生成</title>
+<meta name="description" content="批量识别电子发票（PDF/OFD/图片），自动按供货单位填入元器件入库单并生成 Excel，全部在浏览器本地完成，数据不上传。">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>电子发票 → <span>元器件入库单</span></h1>
+  <p class="sub">批量识别发票 → 核对明细 → 按供货单位自动生成入库单 Excel · 全程浏览器本地处理，数据不出电脑</p>
+</header>
+
+<main>
+  <!-- 第 1 步：上传 -->
+  <section class="card" id="sec-upload">
+    <h2><span class="step">1</span>上传发票</h2>
+    <div id="drop" class="drop">
+      <p class="big">拖拽发票文件到此处，或</p>
+      <p>
+        <label class="btn primary filebtn">选择文件（可多选）
+          <input type="file" id="file" multiple hidden accept=".pdf,.ofd,.png,.jpg,.jpeg,.webp,.bmp,.zip,.xlsx,.csv">
+        </label>
+        <button class="btn" id="btn-sample">载入示例数据</button>
+        <button class="btn danger" id="btn-clear">清空</button>
+      </p>
+      <p class="hint">支持：PDF / OFD / 图片(JPG/PNG) / ZIP 压缩包 / XLSX·CSV 明细表。扫描件与截图自动走 OCR（首次需联网下载识别模型）。</p>
+    </div>
+    <div id="filelog" class="filelog hidden"></div>
+  </section>
+
+  <!-- 第 2 步：识别核对 -->
+  <section class="card" id="sec-rows">
+    <h2><span class="step">2</span>识别结果 · 逐行核对</h2>
+    <div class="stats" id="stats"></div>
+    <div class="warnbox hidden" id="warnings"></div>
+    <div class="tablewrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>开票日期</th><th>销售方名称</th><th>项目名称</th><th>规格型号</th><th>单位</th>
+            <th>数量</th><th>单价</th><th>金额</th><th>税额</th><th>价税合计</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <p><button class="btn" id="btn-addrow">+ 手动加一行</button>
+       <label class="inline"><input type="checkbox" id="chk-fold" checked> 识别时把折扣行并入上一行（净额入库，重新上传生效）</label></p>
+  </section>
+
+  <!-- 第 3 步：生成设置 -->
+  <section class="card" id="sec-settings">
+    <h2><span class="step">3</span>生成设置</h2>
+    <div class="grid">
+      <label>计价口径
+        <select id="opt-pricing">
+          <option value="incl" selected>含税（单价=价税合计÷数量，推荐）</option>
+          <option value="excl">不含税（单价=金额÷数量）</option>
+        </select>
+      </label>
+      <label>输出方式
+        <select id="opt-mode">
+          <option value="single" selected>单文件多 sheet（入库单汇总.xlsx）</option>
+          <option value="files">每供货单位一个文件（打包 zip）</option>
+        </select>
+      </label>
+      <label>每个 sheet 排几张单
+        <select id="opt-persheet">
+          <option value="2" selected>2 张（明细多的自动单独一张）</option>
+          <option value="1">1 张</option>
+        </select>
+      </label>
+      <label>每张单最少明细行
+        <input type="number" id="opt-minrows" value="12" min="1" max="50">
+      </label>
+      <label>sheet 命名
+        <select id="opt-sheetname">
+          <option value="index" selected>序号（0、1、2…）</option>
+          <option value="supplier">供货单位名称</option>
+        </select>
+      </label>
+      <label>供货单位排序
+        <select id="opt-sort">
+          <option value="appearance" selected>按出现顺序</option>
+          <option value="name">按名称</option>
+        </select>
+      </label>
+      <label>表单标题
+        <input type="text" id="opt-title" value="浙江工业大学信息工程学院学生创新活动耗材 入库单">
+      </label>
+      <label>名称列表头
+        <input type="text" id="opt-namelabel" value="耗材名称">
+      </label>
+      <label>入库验收编号
+        <input type="text" id="opt-acceptid" value="04409">
+      </label>
+    </div>
+  </section>
+
+  <!-- 第 4 步：生成 -->
+  <section class="card" id="sec-generate">
+    <h2><span class="step">4</span>分组预览与生成</h2>
+    <div id="groups" class="groups"></div>
+    <p class="totaline" id="totaline"></p>
+    <p>
+      <button class="btn primary big-btn" id="btn-gen">生成并下载 Excel</button>
+    </p>
+    <p class="hint">生成规则：同一供货单位一张入库单；入库日期取该单位最近一次；数量×单价=金额（公式自动算）；合计含人民币大写（公式自动生成）；入库单号=入库日期+2 位随机序号。</p>
+  </section>
+</main>
+
+<footer>
+  <p>🔒 所有识别与生成均在你的浏览器本地完成，发票文件不会上传到任何服务器 ·
+  <a href="README.md">使用说明</a></p>
+</footer>
+
+<script src="lib/exceljs.min.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="lib/pdf.min.js"></script>
+<script>
+  // pdf.js 工作线程指向本地
+  if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerPath = 'lib/pdf.worker.min.js';
+</script>
+<script type="module" src="js/app.js"></script>
+<script>
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>

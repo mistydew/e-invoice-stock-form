@@ -1,0 +1,14 @@
+{
+  "name": "电子发票转元器件入库单",
+  "short_name": "发票入库单",
+  "description": "批量识别电子发票，自动按供货单位填入元器件入库单并生成 Excel",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6fa",
+  "theme_color": "#1e3a8a",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
