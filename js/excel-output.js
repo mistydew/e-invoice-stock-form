@@ -40,6 +40,7 @@ export const TPL = {
     signNum: { name: 'Times New Roman', size: 10 },
   },
   numFmt: '0.00_ ',
+  priceFmt: '0.00######',
   textFmt: '@',
 };
 
@@ -64,7 +65,8 @@ export function buildGroups(rows, opts = {}) {
     let price = null;
     if (r.qty) {
       const raw = pricing === 'incl' ? (r.total ?? 0) / r.qty : (r.amount ?? 0) / r.qty;
-      price = Number(raw.toPrecision(15)); // 与基准一致的 15 位有效数字
+      // 单价保留 8 位小数（与发票一致），保证 数量×单价≈金额 在“分”上吻合
+      price = Number(raw.toFixed(8));
     } else {
       price = pricing === 'incl' ? (r.priceIncl ?? null) : (r.price ?? null);
     }
@@ -227,7 +229,7 @@ function writeForm(ws, start, group, opts = {}) {
 
     const cPrice = ws.getCell(r, 6);
     cPrice.value = item && item.price !== null ? item.price : null;
-    cellStyle(cPrice, { font: t.fonts.num, numFmt: t.numFmt });
+    cellStyle(cPrice, { font: t.fonts.num, numFmt: t.priceFmt });
 
     const cAmt = ws.getCell(r, 7);
     if (item && item.qty !== null && item.price !== null) {

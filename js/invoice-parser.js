@@ -135,24 +135,50 @@ export function foldDiscountRows(rows, discount = 'merge') {
   for (const r of rows) {
     const isDiscount = (r.amount ?? 0) < 0 && r.qty === null && r.price === null;
     if (isDiscount && out.length) {
+      // 优先并入品名相同/相似的明细行（多商品+折扣时避免并错），找不到再退回上一行
       let target = out[out.length - 1];
-      const rn = r.name.replace(/[*\s]/g, '');
+      const rn = normName(r.name);
+      let bestScore = 0;
       for (let i = out.length - 1; i >= 0; i--) {
-        const n = out[i].name.replace(/[*\s]/g, '');
-        if (n && rn && (rn.includes(n) || n.includes(rn))) { target = out[i]; break; }
+        const n = normName(out[i].name);
+        if (!n || !rn) continue;
+        if (rn === n || rn.includes(n) || n.includes(rn)) { target = out[i]; bestScore = 2; break; }
+        const s = diceSimilarity(rn, n);
+        if (s > bestScore && s >= 0.55) { bestScore = s; target = out[i]; }
       }
       target.amount = round2((target.amount || 0) + (r.amount || 0));
       target.tax = round2((target.tax || 0) + (r.tax || 0));
       target.total = round2(target.amount + target.tax);
       if (target.qty) {
-        target.price = target.amount / target.qty;
-        target.priceIncl = target.total / target.qty;
+        target.price = Number((target.amount / target.qty).toFixed(8));
+        target.priceIncl = Number((target.total / target.qty).toFixed(8));
       }
     } else {
       out.push(r);
     }
   }
   return out;
+}
+
+function normName(s) {
+  return String(s || '').replace(/[*\s（）()【】]/g, '');
+}
+
+/** 二元组相似度（0~1），用于折扣行模糊匹配品名 */
+function diceSimilarity(a, b) {
+  if (a.length < 2 || b.length < 2) return 0;
+  const grams = (s) => {
+    const m = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) || 0) + 1);
+    }
+    return m;
+  };
+  const ga = grams(a); const gb = grams(b);
+  let inter = 0;
+  for (const [g, c] of ga) inter += Math.min(c, gb.get(g) || 0);
+  return (2 * inter) / (a.length - 1 + b.length - 1);
 }
 
 /** 发票明细行对象（内部统一结构） */

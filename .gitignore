@@ -6,6 +6,10 @@ _dev/
 *.xlsx
 *.zip
 *.ofd
+*.pdf
+*.png
+Image_*
+digital_*
 
 # 系统
 Thumbs.db
