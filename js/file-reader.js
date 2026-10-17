@@ -1,11 +1,7 @@
 // 文件读取与识别调度：PDF / OFD / 图片(OCR) / ZIP / XLSX / CSV → 结构化发票记录
 // 仅浏览器环境（依赖全局 pdfjsLib / JSZip / ExcelJS / Tesseract 动态加载）
 import { parseInvoiceItems, parseInvoicePlainText, rowsFromTableMatrix, foldDiscountRows } from './invoice-parser.js';
-
-const TESSERACT_SOURCES = [
-  'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
-  'https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js',
-];
+import { recognizeInvoiceImage } from './image-ocr.js';
 
 /** 批量读取文件（含 zip 解包）。返回 [{src, ok, records, warnings, message}] */
 export async function readFiles(fileList, opts = {}) {
@@ -56,31 +52,38 @@ async function handleEntry(entry, prefix, out, opts) {
 // —— PDF：文本层抽取；无文本层（扫描件/路径字）自动转 OCR ——
 export async function readPdf(buffer, name, opts = {}) {
   const pdfjsLib = globalThis.pdfjsLib;
-  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), cMapUrl: new URL('../lib/pdf/cmaps/',import.meta.url).href, cMapPacked:true, standardFontDataUrl:new URL('../lib/pdf/standard_fonts/',import.meta.url).href }).promise;
+  try {
   const items = [];
-  let textLen = 0;
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const tc = await page.getTextContent();
     for (const it of tc.items) {
       if (!it.str || !it.str.trim()) continue;
       items.push({ x: it.transform[4], y: it.transform[5] + p * 2000, w: it.width || 0, str: it.str });
-      textLen += it.str.trim().length;
     }
   }
   let inv = parseInvoiceItems(items);
-  if (!inv.rows.length && textLen < 80 && opts.ocr !== false) {
-    // 文本层为空/过少 → 渲染页面 OCR
+  if (!inv.rows.length && opts.ocr !== false) {
+    // 无法从文本层取得明细 → 渲染页面 OCR，不以文字长度决定是否回退。
     opts.onProgress?.({ file: name, stage: 'ocr' });
-    let text = '';
+    const invoices = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       const canvas = await renderPage(page);
-      text += (await ocrCanvas(canvas, opts.onProgress, name)) + '\n';
+      try {
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) throw new Error('PDF 页面转换失败');
+        invoices.push(await recognizeInvoiceImage(blob, opts.onProgress, name));
+      } finally {canvas.width = canvas.height = 1;}
     }
-    inv = parseInvoicePlainText(text);
+    inv = invoices[0];
+    if (invoices.length > 1) {
+      inv = { ...inv, rows: invoices.flatMap(i => i.rows), warnings: [...invoices.flatMap(i => i.warnings), '扫描型多页 PDF 已逐页识别，请核对页间供货单位和合计'] };
+    }
   }
   return toResult(inv, name, opts);
+  } finally {await doc.destroy();}
 }
 
 // —— OFD：解包 Content.xml 取 TextCode 坐标文本 ——
@@ -114,8 +117,8 @@ export async function readOfd(buffer, name, opts = {}) {
 // —— 图片：OCR ——
 export async function readImage(buffer, name, opts = {}) {
   const blob = new Blob([buffer]);
-  const text = await ocrBlob(blob, opts.onProgress, name);
-  return toResult(parseInvoicePlainText(text), name, opts);
+  const inv = await recognizeInvoiceImage(blob, opts.onProgress, name);
+  return toResult(inv, name, opts);
 }
 
 // —— XLSX：任意明细表导入（发票明细/入库单明细均可） ——
@@ -156,49 +159,6 @@ export async function readCsv(buffer, name) {
   };
 }
 
-// —— OCR（懒加载 tesseract.js，首次需下载中文识别模型） ——
-let tesseractLoading = null;
-async function loadTesseract() {
-  if (globalThis.Tesseract) return globalThis.Tesseract;
-  if (!tesseractLoading) {
-    tesseractLoading = (async () => {
-      for (const src of TESSERACT_SOURCES) {
-        try {
-          await loadScript(src);
-          if (globalThis.Tesseract) return globalThis.Tesseract;
-        } catch (e) { /* 尝试下一个源 */ }
-      }
-      throw new Error('OCR 组件加载失败（需要联网）');
-    })();
-  }
-  return tesseractLoading;
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = () => { s.remove(); reject(new Error('load fail: ' + src)); };
-    document.head.appendChild(s);
-  });
-}
-
-export async function ocrBlob(blob, onProgress, name) {
-  const T = await loadTesseract();
-  const worker = await T.createWorker('chi_sim+eng', 1, {
-    logger: (m) => {
-      if (m.status === 'recognizing text') onProgress?.({ file: name, stage: 'ocr', progress: m.progress });
-    },
-  });
-  try {
-    const { data } = await worker.recognize(blob);
-    return data.text || '';
-  } finally {
-    await worker.terminate();
-  }
-}
-
 async function renderPage(page) {
   const viewport = page.getViewport({ scale: 2 });
   const canvas = document.createElement('canvas');
@@ -206,14 +166,6 @@ async function renderPage(page) {
   canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
   return canvas;
-}
-
-function ocrCanvas(canvas, onProgress, name) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      try { resolve(await ocrBlob(blob, onProgress, name)); } catch (e) { reject(e); }
-    }, 'image/png');
-  });
 }
 
 function toResult(inv, name, opts = {}) {
@@ -226,9 +178,10 @@ function toResult(inv, name, opts = {}) {
     src: name,
   }));
   return {
-    ok: records.length > 0 && !!inv.seller,
+    ok: records.length > 0,
     records,
-    warnings: inv.warnings || [],
-    message: `${records.length} 行`,
+    warnings: [...new Set([...(inv.warnings || []), ...(!inv.seller ? ['未识别出销售方名称，请补填'] : [])])],
+    message: `${records.length} 行${inv.ocr ? ` · ${inv.ocr.method} · 请核对原图` : ''}`,
+    ocr: inv.ocr ? { confidence: inv.ocr.confidence, method: inv.ocr.method } : undefined,
   };
 }

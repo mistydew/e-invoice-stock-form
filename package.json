@@ -7,6 +7,8 @@
   "license": "MIT",
   "main": "electron/main.js",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build:web": "node scripts/build-web.mjs",
     "start": "electron .",
     "dist": "node scripts/build-win.mjs",
     "icon": "node scripts/gen-icon.mjs"

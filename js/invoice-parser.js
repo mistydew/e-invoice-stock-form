@@ -23,8 +23,11 @@ export function parseInvoiceItems(items) {
 
   // 表头上方：发票号码 / 开票日期 / 购销方名称
   const above = clean.filter((it) => it.y > bandInfo.headerY + 3);
-  const number = matchFirst(above, /发票号码\s*[：:]\s*(\d{8,20})/);
-  const dateISO = parseDate(joinText(above).match(/开票日期\s*[：:]\s*([\d\s年月日\/\-.]+)/)?.[1]);
+  // Font baselines differ slightly between labels and values. Reassemble
+  // visual lines before matching, including labels split by PDF word spaces.
+  const headerText=visualText(above).replace(/\s/g,'');
+  const number = headerText.match(/发票号码[：:]?(\d{8,20})/)?.[1];
+  const dateISO = parseDate(headerText.match(/开票日期[：:]?([\d年月日\/\-.]+)/)?.[1]);
   const names = partyNames(above);
 
   // 明细区（到合计/价税合计行为止）
@@ -51,29 +54,34 @@ export function parseInvoiceItems(items) {
 export function parseInvoicePlainText(text) {
   const lines = String(text || '')
     .split(/\r?\n/)
-    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .map((l) => l.replace(/[ \t]+/g, ' ').replace(/(\d)\.\s+(?=\d)/g, '$1.').trim())
     .filter(Boolean);
   if (!lines.length) return emptyInvoice('空白文本');
 
-  const number = matchFirst(lines, /发票号码\s*[：:]\s*(\d{8,20})/);
-  const dateISO = parseDate((lines.find((l) => /开票日期/.test(l)) || '').replace(/.*开票日期\s*[：:]\s*/, ''));
-  const seller = sellerFromText(lines);
+  const compactLines = lines.map(l => l.replace(/\s/g, ''));
+  const number = matchFirst(compactLines, /发票号码\s*[：:]\s*(\d{8,20})/);
+  const dateISO = parseDate((compactLines.find((l) => /开票日期/.test(l)) || '').replace(/.*开票日期\s*[：:]\s*/, ''));
+  const tableStart = compactLines.findIndex(l => /项目名称|商品名称|货物或应税劳务|货物或应税服务/.test(l));
+  const seller = sellerFromText(lines.slice(0, tableStart < 0 ? lines.length : tableStart));
 
   const rows = [];
-  for (const line of lines) {
-    if (/合计|价税合计|小写|大写|开票人|收款人|复核/.test(line)) continue;
+  for (let i = tableStart < 0 ? lines.length : tableStart + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/合计|价税合计|小写|大写|开票人|收款人|复核|备注/.test(compactLines[i])) break;
     const row = parseDetailLine(line);
     if (row) rows.push(row);
   }
 
   const sumAmount = round2(rows.reduce((s, r) => s + (r.amount || 0), 0));
   const sumTax = round2(rows.reduce((s, r) => s + (r.tax || 0), 0));
-  const totalWithTax = findTotalWithTax(lines.map((str) => ({ x: 0, y: 0, w: 0, str })), rows.length ? round2(sumAmount + sumTax) : null);
+  const totalWithTax = findTotalWithTax(compactLines.map((str) => ({ x: 0, y: 0, w: 0, str })), null);
   const warnings = [];
   if (totalWithTax !== null && rows.length && Math.abs(round2(sumAmount + sumTax) - totalWithTax) > 0.01) {
     warnings.push(`明细合计 ${round2(sumAmount + sumTax)} 与价税合计 ${totalWithTax} 不一致，请核对`);
   }
   if (!rows.length) warnings.push('未识别出明细行（OCR 结果可能不完整），请手动补录');
+  if (!seller) warnings.push('未识别出销售方名称');
+  if (!dateISO) warnings.push('未识别出开票日期');
   return { number: number || null, dateISO, seller, buyer: null, rows, totalWithTax, sumAmount, sumTax, warnings };
 }
 
@@ -81,6 +89,7 @@ export function parseInvoicePlainText(text) {
 export function parseDetailLine(line) {
   const src = String(line || '').trim();
   if (!src || !/[一-龥]/.test(src)) return null;
+  if (/发[票景]号[码碼]|开[票标]日期|纳税人识别号|统一社会信用|名称[:：]|价税合计|^合计/.test(src.replace(/\s/g, ''))) return null;
   const tokens = src.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) return null;
 
@@ -149,10 +158,10 @@ export function foldDiscountRows(rows, discount = 'merge') {
       target.amount = round2((target.amount || 0) + (r.amount || 0));
       target.tax = round2((target.tax || 0) + (r.tax || 0));
       target.total = round2(target.amount + target.tax);
-      // 单价 = 税费和折扣都算进去的单价（含税折后单价 = 价税合计净额 ÷ 数量）
+      // Keep the invoice's printed unit price. Only priceIncl is the derived
+      // discounted, tax-inclusive price used by the stock form export.
       if (target.qty) {
         const p = Number((target.total / target.qty).toFixed(8));
-        target.price = p;
         target.priceIncl = p;
       }
     } else {
@@ -256,7 +265,17 @@ function emptyInvoice(reason) {
 }
 
 function joinText(items) {
-  return items.map((it) => it.str).join(' ');
+  return items.map((it) => typeof it === 'string' ? it : it.str).join(' ');
+}
+
+function visualText(items) {
+  const lines=[];
+  for(const item of [...items].sort((a,b)=>b.y-a.y)) {
+    let line=lines.find(l=>Math.abs(l.y-item.y)<=3);
+    if(!line){line={y:item.y,items:[]};lines.push(line);}
+    line.items.push(item);
+  }
+  return lines.map(l=>l.items.sort((a,b)=>a.x-b.x).map(i=>i.str).join('')).join('\n');
 }
 
 function matchFirst(items, re) {
@@ -327,6 +346,12 @@ function partyNames(items) {
       // 取冒号后的取值片段（间距 ≤40px 视为同一值）
       const valParts = [];
       let prevEnd = null;
+      // PDF text extraction can combine the label and its value in one item.
+      const inline=acc.replace(/^.*?名\s*称\s*[：:]\s*/,'').trim();
+      if(inline) {
+        valParts.push({...list[colonAt],str:inline});
+        prevEnd=list[colonAt].x+(list[colonAt].w||0);
+      }
       let stop = colonAt + 1;
       for (let j = colonAt + 1; j < list.length; j++) {
         const it = list[j];
@@ -347,6 +372,8 @@ function partyNames(items) {
 }
 
 function sellerFromText(lines) {
+  const compactNames = lines.flatMap(line => [...line.replace(/\s/g, '').matchAll(/名称[：:]([一-龥A-Za-z0-9（）()·]{2,80})/g)].map(m => m[1]));
+  if (compactNames.length >= 2) return compactNames[compactNames.length - 1];
   const all = lines.join(' ');
   const m = all.match(/销\s*售\s*方[\s\S]{0,40}?名\s*称\s*[：:]\s*([^\s：:（(]{2,40})/);
   if (m) return m[1];

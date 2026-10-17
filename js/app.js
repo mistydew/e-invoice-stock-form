@@ -3,13 +3,33 @@ import { readFiles } from './file-reader.js';
 import { buildGroups, buildWorkbook, buildIndividualFiles, TPL } from './excel-output.js';
 import { sampleRecords } from './sample-data.js';
 import { round2 } from './utils.js';
+import {browserOcrStatus} from './browser-ocr.js';
+import {createImportQueue} from './import-queue.js';
 
 const state = { records: [], logs: [] };
 const $ = (id) => document.getElementById(id);
+async function showOcrStatus() {
+  const status=browserOcrStatus();
+  const element=$('ocr-status');if(!element)return;
+  element.textContent=status?.ready ? 'PP-OCRv5 浏览器增强识别 · 首次识别下载模型，票据始终留在本机' : '当前浏览器使用兼容识别，建议使用新版 Chrome 或 Edge 以启用增强识别';
+}
+showOcrStatus();
 
 // ———— 上传 ————
 const drop = $('drop');
 const fileInput = $('file');
+const importQueue=createImportQueue({
+  processFile:(file,options,onProgress)=>readFiles([file],{ocr:true,...options,onProgress}),
+  onResult:results=>{
+    for(const result of results){state.logs.push(result);if(result.ok)state.records.push(...result.records);}
+    renderAll();
+  },
+  onError:(error,file)=>{
+    state.logs.push({src:file.name,ok:false,records:[],warnings:[],message:'读取失败: '+(error.message||error)});
+    renderAll();
+  },
+  onChange:renderQueue,
+});
 
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -23,42 +43,44 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 $('btn-sample').addEventListener('click', () => {
+  importQueue.clear();
   state.records = sampleRecords.map((r) => ({ ...r }));
   state.logs = [{ src: '示例数据', ok: true, message: `${state.records.length} 行`, warnings: [] }];
   renderAll();
   toast('已载入示例数据');
 });
 $('btn-clear').addEventListener('click', () => {
+  importQueue.clear();
   state.records = [];
   state.logs = [];
   renderAll();
 });
+$('btn-cancel-waiting').addEventListener('click',()=>importQueue.cancelWaiting());
 $('btn-addrow').addEventListener('click', () => {
   state.records.push({ src: '手动', dateISO: todayISO(), seller: '', name: '', spec: '', unit: '', qty: null, price: null, amount: null, tax: 0 });
   renderAll();
 });
 
-async function ingest(files) {
-  const logEl = $('filelog');
-  logEl.classList.remove('hidden');
-  logEl.innerHTML = '<div class="doing">正在识别…（扫描件/图片将启用 OCR，稍候）</div>';
-  const results = await readFiles(files, {
-    ocr: true,
-    fold: $('chk-fold').checked,
-    onProgress: (p) => {
-      if (p.stage === 'ocr') {
-        const pct = p.progress ? ` ${Math.round(p.progress * 100)}%` : '';
-        logEl.innerHTML = `<div class="doing">OCR 识别中：${p.file || ''}${pct}</div>`;
-      }
-    },
-  });
-  for (const r of results) {
-    state.logs.push(r);
-    if (r.ok) state.records.push(...r.records);
-  }
-  renderAll();
-  const n = results.reduce((s, r) => s + r.records.length, 0);
-  toast(`识别完成，共新增 ${n} 行，请核对后生成`);
+function ingest(files) {
+  importQueue.enqueue(files,{fold:$('chk-fold').checked});
+  toast(`已加入 ${files.length} 个文件，将按顺序识别，可继续添加`);
+}
+
+function renderQueue(queue) {
+  const panel=$('import-queue');
+  panel.classList.toggle('hidden',!queue.busy && !queue.finished);
+  const active=queue.active;
+  const pct=active?.progress?.progress;
+  const progress=active?.progress?.message ? ` · ${escapeHtml(active.progress.message)}` : Number.isFinite(pct)?` · ${Math.round(pct*100)}%`:'';
+  $('queue-summary').textContent=queue.busy
+    ? `${active?.obsolete?'正在结束上一项识别':active?'正在识别 1 个文件':'准备识别'} · 等待 ${queue.waiting.length} 个 · 已处理 ${queue.finished} 个`
+    : `队列已完成 · 已处理 ${queue.finished} 个文件`;
+  const items=[...(active?[`<li class="doing">${active.obsolete?'正在结束上一项识别，请稍候':'识别中：'+escapeHtml(active.progress?.file||active.name)+progress}</li>`]:[]),
+    ...queue.waiting.map((job,i)=>`<li>等待 ${i+1}：${escapeHtml(job.name)}</li>`)];
+  $('queue-files').innerHTML=items.join('');
+  $('btn-cancel-waiting').disabled=!queue.waiting.length;
+  $('btn-gen').disabled=queue.busy;
+  $('btn-gen').title=queue.busy?'请等待队列全部处理完毕后导出':'';
 }
 
 // ———— 表格渲染与编辑 ————
@@ -84,6 +106,7 @@ function renderTable() {
       td.className = cls;
       const inp = document.createElement('input');
       inp.value = r[field] ?? '';
+      inp.title = inp.value;
       inp.dataset.idx = i;
       inp.dataset.field = field;
       if (field === 'dateISO') inp.placeholder = 'YYYY-MM-DD';
@@ -92,8 +115,8 @@ function renderTable() {
     }
     const tdT = document.createElement('td');
     tdT.className = 'num';
-    const total = (Number(r.amount) || 0) + (Number(r.tax) || 0);
-    tdT.innerHTML = `<input value="${total ? total.toFixed(2) : ''}" readonly tabindex="-1">`;
+    const total = r.amount === null || r.tax === null ? null : (Number(r.amount) || 0) + (Number(r.tax) || 0);
+    tdT.innerHTML = `<input value="${total === null ? '' : total.toFixed(2)}" readonly tabindex="-1">`;
     tr.appendChild(tdT);
     const tdD = document.createElement('td');
     const del = document.createElement('button');
@@ -125,8 +148,8 @@ $('tbody').addEventListener('change', (e) => {
 function currentRows() {
   return state.records.map((r) => {
     const amount = r.amount ?? null;
-    const tax = r.tax ?? 0;
-    const total = amount === null ? null : round2(amount + (tax || 0));
+    const tax = r.tax;
+    const total = amount === null || tax === null ? null : round2(amount + (tax || 0));
     return {
       ...r, amount, tax, total,
       priceIncl: r.qty ? (total === null ? null : total / r.qty) : r.price,
@@ -149,22 +172,21 @@ function renderStats() {
   for (const l of state.logs) for (const w of l.warnings || []) warns.push(`【${l.src}】${w}`);
   for (const r of state.records) {
     if (!r.seller) warns.push(`有明细缺少销售方名称，请补填`);
-    break;
   }
   const wb = $('warnings');
   if (warns.length) {
     wb.classList.remove('hidden');
-    wb.innerHTML = '⚠ ' + warns.join('<br>⚠ ');
-  } else wb.classList.add('hidden');
+    wb.innerHTML = '⚠ ' + [...new Set(warns)].map(escapeHtml).join('<br>⚠ ');
+  } else {wb.classList.add('hidden');wb.textContent='';}
 
   const gl = $('filelog');
   if (state.logs.length) {
     gl.classList.remove('hidden');
     gl.innerHTML = state.logs.map((l) => {
       const cls = l.ok ? 'ok' : 'bad';
-      return `<div class="${cls}">${l.ok ? '✓' : '✗'} ${l.src} · ${l.message || ''}${(l.warnings || []).length ? ' · ⚠' + l.warnings.join('；') : ''}</div>`;
+      return `<div class="${cls}">${l.ok ? '✓' : '✗'} ${escapeHtml(l.src)} · ${escapeHtml(l.message || '')}${(l.warnings || []).length ? ' · ⚠' + l.warnings.map(escapeHtml).join('；') : ''}</div>`;
     }).join('');
-  } else gl.classList.add('hidden');
+  } else {gl.classList.add('hidden');gl.textContent='';}
 }
 
 function renderGroups() {
@@ -209,6 +231,11 @@ document.querySelectorAll('#sec-settings select, #sec-settings input').forEach((
 
 // ———— 生成下载 ————
 $('btn-gen').addEventListener('click', async () => {
+  if(importQueue.snapshot().busy){toast('请等待队列全部处理完毕后导出');return;}
+  if (state.records.some(r => !Number.isFinite(r.amount) || !Number.isFinite(r.tax))) {
+    toast('请先补全金额和税额，并确认均为有效数字，再生成 Excel');
+    return;
+  }
   const rows = currentRows().filter((r) => r.name || r.total !== null);
   if (!rows.length) { toast('没有可生成的明细，请先上传发票'); return; }
   const opts = readOpts();

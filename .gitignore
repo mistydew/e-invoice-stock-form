@@ -18,5 +18,6 @@ node_modules/
 release/
 release2/
 dist-win/
+dist-web/
 *.log
 .zcodeignore

@@ -70,6 +70,12 @@ main { max-width: 1180px; margin: 18px auto 40px; padding: 0 14px; }
 .filelog .ok { color: var(--ok); }
 .filelog .bad { color: var(--danger); }
 .filelog .doing { color: var(--accent); }
+.import-queue { margin-top: 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: #f8fafc; }
+.import-queue p { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.import-queue ul { margin: 8px 0 0; padding-left: 20px; max-height: 160px; overflow: auto; overflow-wrap: anywhere; }
+.import-queue ul:empty { display: none; }
+.import-queue .doing { color: var(--accent); }
+button:disabled { opacity: .5; cursor: not-allowed; }
 .stats {
   display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
 }
@@ -94,6 +100,8 @@ td input:focus { outline: none; border-color: var(--brand); background: #fff; }
 td input[readonly] { color: var(--muted); cursor: default; }
 td.num input { text-align: right; min-width: 62px; }
 td.name input { min-width: 220px; }
+#tbl td:first-child input { min-width: 100px; }
+#tbl td:nth-child(7) input { min-width: 145px; }
 .rowdel { color: var(--danger); cursor: pointer; border: none; background: none; font-size: 15px; }
 .inline { margin-left: 14px; font-size: 13px; color: var(--muted); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 18px; }
