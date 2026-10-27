@@ -193,7 +193,7 @@ export async function recognizeRapidImage(blob,onProgress,name,options={}) {
     }
     const confidence=mean(words),invoice=parseInvoiceOcr({passes,table,cells,confidence,checkTotal:options.checkTotal});
     if(reviewLimited)invoice.warnings.push('精细复核模型未能加载，已保留轻量识别结果，请对照原图核对');
-    invoice.ocr={confidence,method:'PP-OCRv5 · 浏览器分列复核',text:passes[0].text,cells,table};
+    invoice.ocr={confidence,method:jobs.length && !reviewLimited ? 'PP-OCRv5 · 精细复核' : 'PP-OCRv5 · 轻量识别',text:passes[0].text,cells,table};
     onProgress?.({file:name,stage:'ocr',progress:1});return invoice;
   } finally {image.close();canvas.width=canvas.height=1;}
 }

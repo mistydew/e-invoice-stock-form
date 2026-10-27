@@ -3,7 +3,7 @@ let runtime;
 const sessions=new Map();
 const modelRoot=new URL('../models/rapidocr/',self.location.href);
 let activeId;
-let serverUnavailable=false;
+let serverRetryAt=0;
 const progress=message=>self.postMessage({id:activeId,progress:{message}});
 
 async function initialize() {
@@ -24,13 +24,15 @@ async function initialize() {
 async function session(kind) {
   if(!sessions.has(kind)) {
     const job=(async()=>{
-      const {ort,downloadModel}=await initialize();
+      const {ort,downloadModel,downloadChunkedModel}=await initialize();
       const name=kind==='det' ? 'ch_PP-OCRv5_det_mobile' : kind==='server' ? 'ch_PP-OCRv5_rec_server' : 'ch_PP-OCRv5_rec_mobile';
       const label=kind==='server' ? '精细复核模型' : kind==='det' ? '文字检测模型' : '文字识别模型';
       progress(`正在加载${label}…`);
-      const bytes=await downloadModel(new URL(name+'.onnx',modelRoot).href,({received,total})=>{
-        progress(`正在下载${label} ${(received/1e6).toFixed(1)}${total ? '/'+(total/1e6).toFixed(1) : ''} MB…`);
-      },kind==='server' ? 20000 : 120000);
+      const modelUrl=new URL(name+'.onnx',modelRoot).href;
+      const report=({received,total})=>progress(`正在准备${label} ${(received/1e6).toFixed(1)}${total ? '/'+(total/1e6).toFixed(1) : ''} MB…`);
+      const bytes=kind==='server'
+        ? await downloadChunkedModel(new URL(name+'.parts.json',modelRoot).href,report,modelUrl)
+        : await downloadModel(modelUrl,report);
       progress(`正在初始化${label}…`);
       const model=await ort.InferenceSession.create(bytes,{executionProviders:['wasm'],graphOptimizationLevel:'all'});
       let dictionary;
@@ -131,9 +133,9 @@ function cropQuad(source,points,cv) {
 async function recognize(canvas,accurate=false) {
   const {decodeCtc}=await initialize();
   let selected,reviewLimited=false;
-  if(accurate && !serverUnavailable) {
+  if(accurate && Date.now()>=serverRetryAt) {
     try {selected=await session('server');}
-    catch {serverUnavailable=true;}
+    catch {serverRetryAt=Date.now()+30000;}
   }
   if(!selected){selected=await session('mobile');reviewLimited=accurate;}
   const {model,dictionary}=selected;

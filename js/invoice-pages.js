@@ -9,7 +9,15 @@ export function combineInvoicePages(pages) {
       (!g.seller || !invoice.seller || g.seller===invoice.seller) &&
       (!g.dateISO || !invoice.dateISO || g.dateISO===invoice.dateISO));
     if(!group){group={...invoice,rows:[],warnings:[],totals:[],pageNumbers:[]};groups.push(group);}
-    group.rows.push(...invoice.rows.map(row=>({...row})));
+    const incoming=invoice.rows.map(row=>({...row}));
+    const previous=group.rows.at(-1);
+    if(group.pageNumbers.at(-1)===index && incoming[0]?.continuation &&
+      previous && Number.isFinite(previous.amount) && /^\*/.test(previous.name)) {
+      const tail=incoming.shift();
+      previous.name+=tail.name;
+      previous.spec+=tail.spec;
+    }
+    group.rows.push(...incoming);
     group.pageNumbers.push(index+1);
     group.seller ||= invoice.seller;
     group.dateISO ||= invoice.dateISO;

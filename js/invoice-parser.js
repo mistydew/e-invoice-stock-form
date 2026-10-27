@@ -489,7 +489,14 @@ function parseDetailBlocks(items, bandInfo) {
       firstNum(cur.qty), firstNum(cur.price), firstNum(cur.amount),
       cur.rate[0] ? cur.rate[0].str.trim() : null, firstNum(cur.tax),
     );
-    if (r.name || r.amount !== null) rows.push(r);
+    // A page can start with the remaining description of the prior page's
+    // last item. Mark only leading text before a classified item, with no
+    // unit, quantity, price, amount, rate or tax printed alongside it.
+    const continuation=rows.length===0 && hasStars && !/^\*/.test(r.name) &&
+      (cur.name.length || cur.spec.length) &&
+      ['unit','qty','price','amount','rate','tax'].every(key=>!cur[key].length);
+    if(continuation)r.continuation=true;
+    if (r.name || r.amount !== null || continuation) rows.push(r);
     cur = null;
   };
   const blank = () => ({ name: [], spec: [], unit: [], qty: [], price: [], amount: [], rate: [], tax: [] });

@@ -48,3 +48,33 @@ test('多页合并后仍报告真实的总额差异，不能用合计倒推明�
   assert.deepEqual(result.records.map(r=>r.amount),[20,5]);
   assert.ok(result.warnings.some(w=>w.includes('99') && w.includes('不一致')));
 });
+
+test('页首无金额的名称续行接回同票上一页商品，不生成空金额明细',async()=>{
+  const first=page('12345678901234567890',[['*材料*电容系列100p',20,2.6]],null);
+  const second=page('12345678901234567890',[['*材料*商品乙',5,.65]],28.25);
+  const original=second.getTextContent;
+  second.getTextContent=async()=>{const content=await original();content.items.push({str:'F220pF1uF',width:72,transform:[1,0,0,1,30,575]});return content;};
+  const result=await read([first,second]);
+  assert.equal(result.records.length,2);
+  assert.equal(result.records[0].name,'*材料*电容系列100pF220pF1uF');
+  assert.deepEqual(result.records.map(r=>r.amount),[20,5]);
+  assert.deepEqual(result.warnings,[]);
+});
+
+test('不同票号的页首无金额行不能拼到前一张发票或被静默丢弃',async()=>{
+  const second=page('12345678901234567891',[['*材料*商品乙',5,.65]],5.65);
+  const original=second.getTextContent;
+  second.getTextContent=async()=>{const content=await original();content.items.push({str:'未确认描述',width:72,transform:[1,0,0,1,30,575]});return content;};
+  const result=await read([page('12345678901234567890',[['*材料*商品甲',20,2.6]],22.6),second]);
+  assert.equal(result.records.length,3);assert.equal(result.records[0].name,'*材料*商品甲');
+  assert.equal(result.records[1].amount,null);assert.equal(result.records[1].name,'未确认描述');
+});
+
+test('带商品分类开头但金额缺失的新商品不能当作续行',async()=>{
+  const second=page('12345678901234567890',[['*材料*商品乙',5,.65]],28.25);
+  const original=second.getTextContent;
+  second.getTextContent=async()=>{const content=await original();content.items.push({str:'*材料*待核对商品',width:100,transform:[1,0,0,1,30,575]});return content;};
+  const result=await read([page('12345678901234567890',[['*材料*商品甲',20,2.6]],null),second]);
+  assert.equal(result.records.length,3);assert.equal(result.records[1].amount,null);
+  assert.equal(result.records[0].name,'*材料*商品甲');
+});

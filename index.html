@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>电子发票 → 元器件入库单 · 网页增强版 v5.1.1</title>
+<title>电子发票 → 元器件入库单 · 网页增强版 v5.2</title>
 <meta name="description" content="批量识别电子发票（PDF/OFD/图片），自动按供货单位填入元器件入库单并生成 Excel，全部在本机完成，发票不上传云端。">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -28,7 +28,7 @@
         <button class="btn" id="btn-sample">载入示例数据</button>
         <button class="btn danger" id="btn-clear">清空</button>
       </p>
-      <p class="hint">支持：多页 PDF / OFD / 图片(JPG/PNG) / ZIP 压缩包 / XLSX·CSV 明细表。网页增强版 v5.1.1，无需安装。首次图片识别加载约 45 MB 基础资源，再尝试约 85 MB 的精细复核模型；精细模型下载超时会保留基础结果并提示核对。发票不上传。支持多文件排队；刷新页面会清空队列。</p>
+      <p class="hint">支持：多页 PDF / OFD / 图片(JPG/PNG) / ZIP 压缩包 / XLSX·CSV 明细表。网页增强版 v5.2，无需安装。首次图片识别加载约 45 MB 基础资源和约 85 MB 精细模型；精细模型分块下载、失败自动重试，已完成分块可复用。发票不上传。支持多文件排队；刷新页面会清空队列。</p>
       <p id="ocr-status" class="hint" role="status">正在检查浏览器识别能力…</p>
     </div>
     <div id="import-queue" class="import-queue hidden">
