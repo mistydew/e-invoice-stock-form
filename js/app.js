@@ -159,8 +159,8 @@ $('tbody').addEventListener('input', (e) => {
 // ———— 汇总渲染 ————
 function currentRows() {
   return state.records.map((r) => {
-    const amount = r.amount ?? null;
-    const tax = r.tax;
+    const amount = Number.isFinite(r.amount) ? r.amount : null;
+    const tax = Number.isFinite(r.tax) ? r.tax : null;
     const total = recordTotal(r);
     return {
       ...r, amount, tax, total,
