@@ -24,6 +24,15 @@ test('复核不能静默删掉原始规格中可信的尾部字符',()=>{
   assert.equal(tail.text,'16V±');assert.equal(tail.disagreement,true);
 });
 
+test('精细模型不可用时，同引擎裁剪不能覆盖可靠初读导致名称漏字',()=>{
+  const word={text:'示例电子有限公司',confidence:98,chars:[{text:'子'}]};
+  applyOcrReview(word,{text:'示例电有限公司',confidence:99,reviewLimited:true});
+  assert.equal(word.text,'示例电子有限公司');assert.equal(word.disagreement,true);assert.ok(word.chars);
+  const incomplete={text:'示例电有限公司',confidence:98};
+  applyOcrReview(incomplete,{text:'示例电子有限公司',confidence:99,reviewLimited:true});
+  assert.equal(incomplete.text,'示例电子有限公司');assert.equal(incomplete.disagreement,true);
+});
+
 test('PDF 将名称标签和值放在同一文字块时，仍分开购销方',()=>{
   const item=(str,x,y,w=str.length*14)=>({str,x,y,w});
   const items=[item('名称： 清风采购中心',35,405),item('名称： 远山材料有限公司',475,405)];

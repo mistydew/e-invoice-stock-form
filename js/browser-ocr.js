@@ -12,7 +12,7 @@ export function browserOcrCall(request,onProgress) {
     worker=new Worker(new URL('./ocr-worker.js',import.meta.url));
     worker.onmessage=({data})=>{
       const task=pending.get(data.id);if(!task)return;
-      if(data.progress){task.onProgress?.(data.progress);return;}
+      if(data.progress){task.refresh();task.onProgress?.(data.progress);return;}
       clearTimeout(task.timer);pending.delete(data.id);
       if(data.error)task.reject(new Error(data.error));else task.resolve(data.result);
     };
@@ -20,9 +20,13 @@ export function browserOcrCall(request,onProgress) {
   }
   const id=++serial;
   return new Promise((resolve,reject)=>{
-    // Loading large models on a slow first connection can take several minutes.
-    const timer=setTimeout(()=>stop('识别超时，请检查网络或裁剪图片后重试'),300000);
-    pending.set(id,{resolve,reject,onProgress,timer});worker.postMessage({id,...request});
+    // Real download/field progress resets the inactivity timeout. A healthy
+    // long invoice should not be terminated at a fixed total elapsed time.
+    const task={resolve,reject,onProgress,timer:null,refresh(){
+      clearTimeout(this.timer);
+      this.timer=setTimeout(()=>stop('识别长时间无进展，请刷新重试或更换清晰图片'),180000);
+    }};
+    task.refresh();pending.set(id,task);worker.postMessage({id,...request});
   });
 }
 

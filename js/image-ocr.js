@@ -56,8 +56,8 @@ function crop(canvas,box) {
   return out;
 }
 
-export async function recognizeInvoiceImage(blob,onProgress,name) {
-  if(browserOcrStatus()?.ready)return recognizeRapidImage(blob,onProgress,name);
+export async function recognizeInvoiceImage(blob,onProgress,name,options={}) {
+  if(browserOcrStatus()?.ready)return recognizeRapidImage(blob,onProgress,name,options);
   const T=await engine();
   const canvas=await prepare(blob);
   const base=new URL('../lib/ocr/',import.meta.url);
@@ -113,7 +113,7 @@ export async function recognizeInvoiceImage(blob,onProgress,name) {
       cells.push(result);
     }
     const confidence=passes[0].confidence;
-    const invoice=parseInvoiceOcr({passes,table,cells,confidence});
+    const invoice=parseInvoiceOcr({passes,table,cells,confidence,checkTotal:options.checkTotal});
     invoice.ocr={confidence,method:'本地 OCR · 坐标分列',text:passes[0].text,cells,table};
     onProgress?.({file:name,stage:'ocr',progress:1});
     return invoice;

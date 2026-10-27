@@ -182,7 +182,7 @@ export function numeric(s) {
   const value=String(s||'').normalize('NFKC').trim().replace(/(\d)\s*\.\s*(?=\d)/g,'$1.').replace(/[¥￥,，]/g,'');
   return /^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value) ? toNum(value) : null;
 }
-export function validateOcrInvoice(inv) {
+export function validateOcrInvoice(inv, {checkTotal=true} = {}) {
   const warnings=[...(inv.warnings||[])];
   if(!inv.seller) warnings.push('未识别出销售方名称，请补填');
   if(!inv.dateISO) warnings.push('未识别出开票日期，请补填');
@@ -200,8 +200,8 @@ export function validateOcrInvoice(inv) {
   });
   inv.sumAmount=round2(inv.rows.reduce((s,r)=>s+(r.amount||0),0));
   inv.sumTax=round2(inv.rows.reduce((s,r)=>s+(r.tax||0),0));
-  if(inv.totalWithTax===null) warnings.push('未识别出票面价税合计，无法完成总额核对');
-  else if(inv.rows.length && Math.abs(round2(inv.sumAmount+inv.sumTax)-inv.totalWithTax)>.01) warnings.push(`明细含税合计 ${round2(inv.sumAmount+inv.sumTax)} 与票面 ${inv.totalWithTax} 不一致，请核对`);
+  if(checkTotal && inv.totalWithTax===null) warnings.push('未识别出票面价税合计，无法完成总额核对');
+  else if(checkTotal && inv.rows.length && Math.abs(round2(inv.sumAmount+inv.sumTax)-inv.totalWithTax)>.01) warnings.push(`明细含税合计 ${round2(inv.sumAmount+inv.sumTax)} 与票面 ${inv.totalWithTax} 不一致，请核对`);
   inv.warnings=[...new Set(warnings)];
   return inv;
 }
@@ -219,7 +219,7 @@ export function findOcrTotal(passes) {
   return null;
 }
 
-export function parseInvoiceOcr({passes,table,cells,confidence}) {
+export function parseInvoiceOcr({passes,table,cells,confidence,checkTotal=true}) {
   // Vertical side labels span several horizontal lines. Including their tall
   // boxes inflates line spacing and joins buyer/seller names across columns.
   const headerWords=passes[0].words.filter(w=>(!table || w.bbox.y0<table.bottom) &&
@@ -258,5 +258,5 @@ export function parseInvoiceOcr({passes,table,cells,confidence}) {
     return row;
   }).filter(r=>r.name || r.amount!==null);
   if(confidence<65) warnings.push('图片整体识别把握较低，请逐项核对');
-  return validateOcrInvoice({number,dateISO:parseDate(date),seller:names.length>=2 ? names.at(-1) : null,buyer:names[0]||null,rows,totalWithTax:numeric(totalText),warnings});
+  return validateOcrInvoice({number,dateISO:parseDate(date),seller:names.length>=2 ? names.at(-1) : null,buyer:names[0]||null,rows,totalWithTax:numeric(totalText),warnings},{checkTotal});
 }

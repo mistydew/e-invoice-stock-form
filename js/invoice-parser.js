@@ -9,7 +9,7 @@ const NUM_PLAIN = /^[-+]?[\d,]*\.?\d+$/;
  * 解析带坐标的文本块（pdf.js getTextContent / OFD TextCode）。
  * items: [{x, y, w, str}]  x/y 为页面坐标（pdf 坐标系 y 向上）。
  */
-export function parseInvoiceItems(items) {
+export function parseInvoiceItems(items, {checkTotal=true} = {}) {
   const clean = items
     .filter((it) => it && it.str && it.str.trim())
     .map((it) => ({ x: it.x || 0, y: it.y || 0, w: it.w || 0, str: String(it.str) }));
@@ -40,7 +40,7 @@ export function parseInvoiceItems(items) {
   const totalWithTax = findTotalWithTax(clean, rows.length ? round2(sumAmount + sumTax) : null);
 
   const warnings = [];
-  if (totalWithTax !== null && rows.length && Math.abs(round2(sumAmount + sumTax) - totalWithTax) > 0.01) {
+  if (checkTotal && totalWithTax !== null && rows.length && Math.abs(round2(sumAmount + sumTax) - totalWithTax) > 0.01) {
     warnings.push(`明细合计 ${round2(sumAmount + sumTax)} 与价税合计 ${totalWithTax} 不一致，请核对`);
   }
   if (!rows.length) warnings.push('未识别出明细行，请手动补录');

@@ -57,10 +57,40 @@ function joinWords(words) {
   return groupOcrLines(words).map(l=>l.words.map(w=>w.text).join('')).join('');
 }
 
+async function recoverHeaders(canvas,table,words,call) {
+  const order=['name','spec','unit','qty','price','amount','rate','tax'],jobs=[];
+  for(const key of ['spec','unit','rate']) {
+    if(table.fields[key])continue;
+    const index=order.indexOf(key),left=table.fields[order[index-1]],right=table.fields[order[index+1]];
+    if(!left || !right)continue;
+    const x=Math.max(0,Math.floor(left.x1+table.h*.1)),end=Math.min(canvas.width,Math.ceil(right.x0-table.h*.1));
+    const y=Math.max(0,Math.floor(Math.min(...Object.values(table.fields).map(f=>f.y0))-table.h*.25));
+    const bottom=Math.min(canvas.height,Math.ceil(table.bottom+1));
+    if(end<=x || bottom<=y)continue;
+    const crop=document.createElement('canvas');crop.width=end-x;crop.height=bottom-y;
+    crop.getContext('2d').drawImage(canvas,x,y,crop.width,crop.height,0,0,crop.width,crop.height);
+    jobs.push({key,x,y,image:crop.toDataURL('image/png').split(',')[1]});
+    crop.width=crop.height=1;
+  }
+  if(!jobs.length)return;
+  const response=await call({op:'regions',regions:jobs.map(j=>({image:j.image,returnChars:true}))});
+  response.regions.forEach((r,i)=>{
+    const label={spec:'规格型号',unit:'单位',rate:'税率'}[jobs[i].key];
+    if(r.text.replace(/\s/g,'')!==label || r.confidence<65 || !r.chars?.length)return;
+    const {x,y}=jobs[i];
+    const chars=r.chars.filter(c=>c.text.trim()).map(c=>({...c,bbox:{x0:c.bbox.x0+x,y0:c.bbox.y0+y,x1:c.bbox.x1+x,y1:c.bbox.y1+y}}));
+    words.push({text:label,confidence:r.confidence,chars,bbox:{x0:Math.min(...chars.map(c=>c.bbox.x0)),y0:Math.min(...chars.map(c=>c.bbox.y0)),x1:Math.max(...chars.map(c=>c.bbox.x1)),y1:Math.max(...chars.map(c=>c.bbox.y1))}});
+  });
+}
+
 // Shared by every reviewed word, independent of invoice or product identity.
 export function applyOcrReview(word,result) {
   if(!result.text?.trim())return;
   const different=result.text.replace(/\s/g,'')!==word.text.replace(/\s/g,'');
+  // The fallback repeats the same recognizer on a smaller crop; it is not an
+  // independent accurate reading. Do not shorten a confident full-page result,
+  // but still allow a crop to recover omitted characters.
+  if(result.reviewLimited && different && word.confidence>=90 && result.text.replace(/\s/g,'').length<=word.text.replace(/\s/g,'').length){word.disagreement=true;return;}
   // A second recognizer may omit a trailing symbol or the start of a name.
   // Keep the fuller plausible reading and flag it for the user to verify.
   const initial=word.text.replace(/\s/g,''),reviewedText=result.text.replace(/\s/g,'');
@@ -75,7 +105,7 @@ export function applyOcrReview(word,result) {
   delete word.chars;
 }
 
-export async function recognizeRapidImage(blob,onProgress,name) {
+export async function recognizeRapidImage(blob,onProgress,name,options={}) {
   const call=request=>browserOcrCall(request,detail=>onProgress?.({file:name,stage:'ocr',...detail}));
   const image=await createImageBitmap(blob);
   const canvas=document.createElement('canvas');
@@ -106,6 +136,8 @@ export async function recognizeRapidImage(blob,onProgress,name) {
     let passes=[{words,text:words.map(w=>w.text).join('\n'),confidence:mean(words)}];
     let table=findOcrTable(passes,canvas.width,canvas.height);
     if(!table?.rows.length)throw new Error('未能定位发票明细表，请使用完整清晰的发票截图');
+    await recoverHeaders(canvas,table,words,call);
+    table=findOcrTable(passes,canvas.width,canvas.height);
     onProgress?.({file:name,stage:'ocr',progress:.35});
     // Always review names, including high-confidence omissions: a confidence
     // score does not prove that all printed characters were retained.
@@ -114,9 +146,11 @@ export async function recognizeRapidImage(blob,onProgress,name) {
     for(const row of table.rows)for(const key of ['name','spec'])for(const w of selectedWords(bodyWords,row.cells[key],key)){w.bodyReview=true;review.add(w);}
     const jobs=[...review];
     // Bound each request for large invoices, while keeping a single model loaded.
+    let reviewLimited=false;
     for(let i=0;i<jobs.length;i+=30) {
       const batch=jobs.slice(i,i+30);
       const response=await call({op:'regions',regions:batch.map(w=>({image:wordRegion(canvas,w),accurate:true}))});
+      reviewLimited ||= response.regions.some(r=>r.reviewLimited);
       response.regions.forEach((r,j)=>applyOcrReview(batch[j],r));
       onProgress?.({file:name,stage:'ocr',progress:.35+.45*Math.min(1,(i+30)/jobs.length)});
     }
@@ -145,18 +179,20 @@ export async function recognizeRapidImage(blob,onProgress,name) {
       const mismatch=q!==null && p!==null && a!==null && Math.abs(Math.round(q*p*100)/100-a)>.02;
       if((numericField ? numeric(cell.text)===null : !cell.text.trim()) || cell.confidence<95 || (mismatch && ['qty','price'].includes(key))) {
         const b=row.cells[key];
-        retries.push({i,key,image:numberRegion(canvas,b,numericField ? finalBody : [])});
+        const top=numericField ? b.top : Math.max(b.top,table.bottom+1);
+        retries.push({i,key,image:numberRegion(canvas,{...b,top,height:Math.max(1,b.top+b.height-top)},numericField ? finalBody : [])});
       }
     }
     for(let offset=0;offset<retries.length;offset+=120) {
       const batch=retries.slice(offset,offset+120);
-      const response=await call({op:'regions',regions:batch.map(r=>({image:r.image,accurate:['unit','rate'].includes(r.key)}))});
+      const response=await call({op:'regions',regions:batch.map(r=>({image:r.image}))});
       response.regions.forEach((r,j)=>{
         const {i,key}=batch[j];
         if(['unit','rate'].includes(key) ? r.text.trim() && r.confidence>=65 : numeric(r.text)!==null)cells[i][key]=r;
       });
     }
-    const confidence=mean(words),invoice=parseInvoiceOcr({passes,table,cells,confidence});
+    const confidence=mean(words),invoice=parseInvoiceOcr({passes,table,cells,confidence,checkTotal:options.checkTotal});
+    if(reviewLimited)invoice.warnings.push('精细复核模型未能加载，已保留轻量识别结果，请对照原图核对');
     invoice.ocr={confidence,method:'PP-OCRv5 · 浏览器分列复核',text:passes[0].text,cells,table};
     onProgress?.({file:name,stage:'ocr',progress:1});return invoice;
   } finally {image.close();canvas.width=canvas.height=1;}

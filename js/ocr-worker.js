@@ -3,19 +3,20 @@ let runtime;
 const sessions=new Map();
 const modelRoot=new URL('../models/rapidocr/',self.location.href);
 let activeId;
+let serverUnavailable=false;
 const progress=message=>self.postMessage({id:activeId,progress:{message}});
 
 async function initialize() {
   if(!runtime)runtime=(async()=>{
     progress('首次加载浏览器识别引擎…');
-    const [{default:ort},math]=await Promise.all([
-      import('../lib/onnx/ort.wasm.min.mjs'),import('./ocr-math.js')
+    const [{default:ort},math,assets]=await Promise.all([
+      import('../lib/onnx/ort.wasm.min.mjs'),import('./ocr-math.js'),import('./model-download.js')
     ]);
     ort.env.wasm.numThreads=1;
     ort.env.wasm.wasmPaths=new URL('../lib/onnx/',self.location.href).href;
     importScripts('../lib/opencv/opencv.js');
     const cv=await self.cv;
-    return {ort,cv,...math};
+    return {ort,cv,...math,...assets};
   })();
   return runtime;
 }
@@ -23,10 +24,15 @@ async function initialize() {
 async function session(kind) {
   if(!sessions.has(kind)) {
     const job=(async()=>{
-      const {ort}=await initialize();
+      const {ort,downloadModel}=await initialize();
       const name=kind==='det' ? 'ch_PP-OCRv5_det_mobile' : kind==='server' ? 'ch_PP-OCRv5_rec_server' : 'ch_PP-OCRv5_rec_mobile';
-      progress(kind==='server' ? '首次下载精细复核模型（约 85 MB），之后可复用…' : '加载文字检测与识别模型（首次约 22 MB）…');
-      const model=await ort.InferenceSession.create(new URL(name+'.onnx',modelRoot).href,{executionProviders:['wasm'],graphOptimizationLevel:'all'});
+      const label=kind==='server' ? '精细复核模型' : kind==='det' ? '文字检测模型' : '文字识别模型';
+      progress(`正在加载${label}…`);
+      const bytes=await downloadModel(new URL(name+'.onnx',modelRoot).href,({received,total})=>{
+        progress(`正在下载${label} ${(received/1e6).toFixed(1)}${total ? '/'+(total/1e6).toFixed(1) : ''} MB…`);
+      },kind==='server' ? 20000 : 120000);
+      progress(`正在初始化${label}…`);
+      const model=await ort.InferenceSession.create(bytes,{executionProviders:['wasm'],graphOptimizationLevel:'all'});
       let dictionary;
       if(kind!=='det') {
         const response=await fetch(new URL(name+'.json',modelRoot));
@@ -123,12 +129,20 @@ function cropQuad(source,points,cv) {
 }
 
 async function recognize(canvas,accurate=false) {
-  const {decodeCtc}=await initialize(),{model,dictionary}=await session(accurate?'server':'mobile');
+  const {decodeCtc}=await initialize();
+  let selected,reviewLimited=false;
+  if(accurate && !serverUnavailable) {
+    try {selected=await session('server');}
+    catch {serverUnavailable=true;}
+  }
+  if(!selected){selected=await session('mobile');reviewLimited=accurate;}
+  const {model,dictionary}=selected;
   const contentWidth=Math.ceil(48*canvas.width/canvas.height),width=Math.max(320,contentWidth);
   if(width>4096)throw new Error('文字区域过长，请使用清晰的完整发票');
   const output=await run(model,await tensor(canvas,width,48,false,contentWidth));
   try {
     const result=decodeCtc(output.data,output.dims[1],output.dims[2],dictionary);
+    result.reviewLimited=reviewLimited;
     const steps=output.dims[1];
     result.tokens.forEach(t=>t.center=(t.start+t.end+1)/2/steps*width*canvas.width/contentWidth);
     return result;
@@ -145,7 +159,8 @@ function characterBoxes(crop,result,points) {
     let left=end,right=start,top=height,bottom=0;
     for(let x=start;x<end;x++)for(let y=Math.floor(height*.12);y<height*.88;y++) {
       const p=(y*width+x)*4;
-      if(pixels[p]+pixels[p+1]+pixels[p+2]<510 && !(pixels[p]>pixels[p+1]+25 && pixels[p]>pixels[p+2]+25)){
+      // Printed invoice headers are often red. They still define column edges.
+      if(pixels[p]+pixels[p+1]+pixels[p+2]<510){
         left=Math.min(left,x);right=Math.max(right,x+1);top=Math.min(top,y);bottom=Math.max(bottom,y+1);
       }
     }
@@ -192,16 +207,21 @@ self.onmessage=({data:request})=>{
       else if(request.op==='regions') {
         if(!Array.isArray(request.regions) || request.regions.length>120)throw new Error('一次最多复核 120 个区域');
         result={regions:[]};
-        for(const region of request.regions) {
+        for(const [index,region] of request.regions.entries()) {
           const canvas=await imageFromBase64(region.image);
-          try {const r=await recognize(canvas,region.accurate);result.regions.push({text:r.text,confidence:r.confidence});}
+          try {
+            const r=await recognize(canvas,region.accurate);
+            const chars=region.returnChars ? characterBoxes(canvas,r,[{x:0,y:0},{x:canvas.width,y:0},{x:canvas.width,y:canvas.height},{x:0,y:canvas.height}]) : undefined;
+            result.regions.push({text:r.text,confidence:r.confidence,reviewLimited:r.reviewLimited,chars});
+          }
           finally {canvas.width=canvas.height=1;}
+          progress(`正在复核字段 ${index+1}/${request.regions.length}…`);
         }
       } else throw new Error('不支持的识别操作');
       self.postMessage({id:request.id,result});
     } catch(error) {
       // Keep invoice text and pixels out of logs and error reports.
-      self.postMessage({id:request.id,error:'浏览器识别未完成，请检查网络、刷新或裁剪图片后重试。'+(error.message?.startsWith('图片') ? error.message : '')});
+      self.postMessage({id:request.id,error:/^(图片|识别模型)/.test(error.message||'') ? error.message : '浏览器识别未完成，请刷新或更换清晰图片后重试'});
     }
   });
 };

@@ -2,6 +2,7 @@
 // 仅浏览器环境（依赖全局 pdfjsLib / JSZip / ExcelJS / Tesseract 动态加载）
 import { parseInvoiceItems, parseInvoicePlainText, rowsFromTableMatrix, foldDiscountRows } from './invoice-parser.js';
 import { recognizeInvoiceImage } from './image-ocr.js';
+import { combineInvoicePages } from './invoice-pages.js';
 
 /** 批量读取文件（含 zip 解包）。返回 [{src, ok, records, warnings, message}] */
 export async function readFiles(fileList, opts = {}) {
@@ -54,35 +55,28 @@ export async function readPdf(buffer, name, opts = {}) {
   const pdfjsLib = globalThis.pdfjsLib;
   const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), cMapUrl: new URL('../lib/pdf/cmaps/',import.meta.url).href, cMapPacked:true, standardFontDataUrl:new URL('../lib/pdf/standard_fonts/',import.meta.url).href }).promise;
   try {
-  const items = [];
+  const invoices = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const tc = await page.getTextContent();
-    for (const it of tc.items) {
-      if (!it.str || !it.str.trim()) continue;
-      items.push({ x: it.transform[4], y: it.transform[5] + p * 2000, w: it.width || 0, str: it.str });
-    }
-  }
-  let inv = parseInvoiceItems(items);
-  if (!inv.rows.length && opts.ocr !== false) {
-    // 无法从文本层取得明细 → 渲染页面 OCR，不以文字长度决定是否回退。
-    opts.onProgress?.({ file: name, stage: 'ocr' });
-    const invoices = [];
-    for (let p = 1; p <= doc.numPages; p++) {
-      const page = await doc.getPage(p);
+    const items=tc.items.filter(it=>it.str?.trim()).map(it=>({x:it.transform[4],y:it.transform[5],w:it.width||0,str:it.str}));
+    let inv=parseInvoiceItems(items,{checkTotal:false});
+    if(!inv.rows.length && opts.ocr!==false) {
+      const progress=detail=>opts.onProgress?.({...detail,file:name,message:`第 ${p}/${doc.numPages} 页 · ${detail.message||'正在识别'}`});
       const canvas = await renderPage(page);
       try {
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
         if (!blob) throw new Error('PDF 页面转换失败');
-        invoices.push(await recognizeInvoiceImage(blob, opts.onProgress, name));
+        inv=await recognizeInvoiceImage(blob,progress,name,{checkTotal:false});
       } finally {canvas.width = canvas.height = 1;}
     }
-    inv = invoices[0];
-    if (invoices.length > 1) {
-      inv = { ...inv, rows: invoices.flatMap(i => i.rows), warnings: [...invoices.flatMap(i => i.warnings), '扫描型多页 PDF 已逐页识别，请核对页间供货单位和合计'] };
-    }
+    invoices.push(inv);
   }
-  return toResult(inv, name, opts);
+  const results=combineInvoicePages(invoices).map(inv=>toResult(inv,name,opts));
+  const records=results.flatMap(result=>result.records);
+  const ocr=results.find(result=>result.ocr)?.ocr;
+  return {ok:records.length>0,records,warnings:[...new Set(results.flatMap(result=>result.warnings))],
+    message:`${doc.numPages} 页 · ${records.length} 行${ocr ? ` · ${ocr.method} · 请核对原图` : ''}`,ocr};
   } finally {await doc.destroy();}
 }
 
