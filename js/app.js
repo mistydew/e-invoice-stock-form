@@ -2,7 +2,8 @@
 import { readFiles } from './file-reader.js';
 import { buildGroups, buildWorkbook, buildIndividualFiles, TPL } from './excel-output.js';
 import { sampleRecords } from './sample-data.js';
-import { round2 } from './utils.js';
+import { toNum } from './utils.js';
+import {recordIssues,recordTotal} from './record-validation.js';
 import {browserOcrStatus} from './browser-ocr.js';
 import {createImportQueue} from './import-queue.js';
 
@@ -99,8 +100,10 @@ const COLS = [
 function renderTable() {
   const tb = $('tbody');
   tb.innerHTML = '';
+  const invalid=new Map(recordIssues(state.records).map(issue=>[issue.index,issue.fields]));
   state.records.forEach((r, i) => {
     const tr = document.createElement('tr');
+    const rowNumber=document.createElement('td');rowNumber.textContent=String(i+1);rowNumber.title=r.src||'未标注来源';tr.appendChild(rowNumber);
     for (const [field, , cls] of COLS) {
       const td = document.createElement('td');
       td.className = cls;
@@ -109,13 +112,16 @@ function renderTable() {
       inp.title = inp.value;
       inp.dataset.idx = i;
       inp.dataset.field = field;
+      inp.setAttribute('aria-label',`第 ${i+1} 行${COLS.find(c=>c[0]===field)[1]}`);
+      const problem=invalid.get(i)?.find(f=>f.key===field);
+      if(problem){inp.classList.add('invalid-number');inp.setAttribute('aria-invalid','true');inp.placeholder='待核对';inp.title=`${r.src||'未标注来源'} · 第 ${i+1} 行 · ${problem.label}${problem.reason}`;}
       if (field === 'dateISO') inp.placeholder = 'YYYY-MM-DD';
       td.appendChild(inp);
       tr.appendChild(td);
     }
     const tdT = document.createElement('td');
     tdT.className = 'num';
-    const total = r.amount === null || r.tax === null ? null : (Number(r.amount) || 0) + (Number(r.tax) || 0);
+    const total = recordTotal(r);
     tdT.innerHTML = `<input value="${total === null ? '' : total.toFixed(2)}" readonly tabindex="-1">`;
     tr.appendChild(tdT);
     const tdD = document.createElement('td');
@@ -130,18 +136,24 @@ function renderTable() {
   });
 }
 
-$('tbody').addEventListener('change', (e) => {
+$('tbody').addEventListener('input', (e) => {
   const inp = e.target;
   if (!inp.dataset || inp.dataset.field === undefined) return;
   const r = state.records[+inp.dataset.idx];
   const field = inp.dataset.field;
   if (['qty', 'price', 'amount', 'tax'].includes(field)) {
     const v = inp.value.trim();
-    r[field] = v === '' ? null : Number(v.replace(/[,¥￥\s]/g, ''));
+    r[field] = v === '' ? null : (toNum(v.normalize('NFKC')) ?? v);
   } else {
     r[field] = inp.value.trim();
   }
-  renderAll();
+  const problem=recordIssues([r])[0]?.fields.find(f=>f.key===field);
+  inp.classList.toggle('invalid-number',!!problem);
+  if(problem){inp.setAttribute('aria-invalid','true');inp.title=problem.label+problem.reason;}
+  else{inp.removeAttribute('aria-invalid');inp.title=inp.value;}
+  const total=recordTotal(r);
+  inp.closest('tr').querySelector('input[readonly]').value=total===null?'':total.toFixed(2);
+  renderStats();renderGroups();
 });
 
 // ———— 汇总渲染 ————
@@ -149,7 +161,7 @@ function currentRows() {
   return state.records.map((r) => {
     const amount = r.amount ?? null;
     const tax = r.tax;
-    const total = amount === null || tax === null ? null : round2(amount + (tax || 0));
+    const total = recordTotal(r);
     return {
       ...r, amount, tax, total,
       priceIncl: r.qty ? (total === null ? null : total / r.qty) : r.price,
@@ -159,13 +171,14 @@ function currentRows() {
 
 function renderStats() {
   const rows = currentRows();
+  const issues=recordIssues(state.records);
   const sellers = new Set(rows.map((r) => r.seller).filter(Boolean));
   const sum = rows.reduce((s, r) => s + (r.total || 0), 0);
   $('stats').innerHTML = [
     `📄 ${state.logs.length} 个文件`,
     `明细 ${rows.length} 行`,
     `供货单位 ${sellers.size} 家`,
-    `价税合计 <b>¥${sum.toFixed(2)}</b>`,
+    `${issues.length?'已确认金额':'价税合计'} <b>¥${sum.toFixed(2)}</b>${issues.length?` · ${issues.length} 行待核对`:''}`,
   ].map((t) => `<span class="chip">${t}</span>`).join('');
 
   const warns = [];
@@ -178,6 +191,11 @@ function renderStats() {
     wb.classList.remove('hidden');
     wb.innerHTML = '⚠ ' + [...new Set(warns)].map(escapeHtml).join('<br>⚠ ');
   } else {wb.classList.add('hidden');wb.textContent='';}
+
+  const errors=$('export-errors');
+  errors.classList.toggle('hidden',!issues.length);
+  errors.innerHTML=issues.length ? `<b>有 ${issues.length} 行数据需要核对，补齐前不能导出。点击下方提示可定位。</b>`+issues.map(issue=>
+    `<button type="button" class="issue-link" data-index="${issue.index}" data-field="${issue.fields[0].key}">【${escapeHtml(issue.source)}】来源第 ${issue.sourceRow} 条（表格第 ${issue.index+1} 行）${escapeHtml(issue.name)}：${issue.fields.map(f=>f.label+f.reason).join('、')}</button>`).join('') : '';
 
   const gl = $('filelog');
   if (state.logs.length) {
@@ -193,19 +211,30 @@ function renderGroups() {
   const rows = currentRows();
   const opts = readOpts();
   const groups = buildGroups(rows, opts);
+  const issues=recordIssues(state.records);
+  const incomplete=seller=>issues.filter(issue=>(state.records[issue.index].seller||'未填供货单位').trim()===seller).length;
   $('groups').innerHTML = groups.map((g) => `
     <div class="gcard">
       <b>${escapeHtml(g.seller)}</b>
       <div class="m">明细 ${g.count} 行 · 入库日期 ${g.date || '—'}</div>
-      <div>小计（含税）<b style="display:inline">¥${g.subtotal.toFixed(2)}</b></div>
+      <div>${incomplete(g.seller)?'已确认金额':'小计'}（${opts.pricing==='excl'?'不含税':'含税'}）<b style="display:inline">¥${g.subtotal.toFixed(2)}</b>${incomplete(g.seller)?` · ${incomplete(g.seller)} 行待核对`:''}</div>
     </div>`).join('') || '<p class="hint">暂无数据</p>';
   const total = groups.reduce((s, g) => s + g.subtotal, 0);
   $('totaline').innerHTML = groups.length
-    ? `共 <b>${groups.length}</b> 张入库单 · 合计 <b>¥${total.toFixed(2)}</b>`
+    ? `共 <b>${groups.length}</b> 张入库单 · ${issues.length?'已确认合计':'合计'} <b>¥${total.toFixed(2)}</b>${issues.length?` · 另有 ${issues.length} 行待核对`:''}`
     : '';
 }
 
 function renderAll() { renderTable(); renderStats(); renderGroups(); }
+
+function focusIssue(index,field) {
+  const input=$('tbody').querySelector(`input[data-idx="${index}"][data-field="${field}"]`);
+  input?.scrollIntoView({block:'center',inline:'center'});input?.focus({preventScroll:true});
+}
+$('export-errors').addEventListener('click',event=>{
+  const button=event.target.closest('button[data-index]');
+  if(button)focusIssue(Number(button.dataset.index),button.dataset.field);
+});
 
 // ———— 设置 ————
 function readOpts() {
@@ -232,8 +261,11 @@ document.querySelectorAll('#sec-settings select, #sec-settings input').forEach((
 // ———— 生成下载 ————
 $('btn-gen').addEventListener('click', async () => {
   if(importQueue.snapshot().busy){toast('请等待队列全部处理完毕后导出');return;}
-  if (state.records.some(r => !Number.isFinite(r.amount) || !Number.isFinite(r.tax))) {
-    toast('请先补全金额和税额，并确认均为有效数字，再生成 Excel');
+  const issues=recordIssues(state.records);
+  if (issues.length) {
+    const first=issues[0];
+    focusIssue(first.index,first.fields[0].key);
+    toast(`共 ${issues.length} 行待核对，已定位第 ${first.index+1} 行：${first.fields.map(f=>f.label+f.reason).join('、')}`);
     return;
   }
   const rows = currentRows().filter((r) => r.name || r.total !== null);

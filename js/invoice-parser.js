@@ -449,33 +449,30 @@ export function bandOf(item, bands, numeric) {
 }
 
 /**
- * 合计区上沿 y：把纵向 20px 内的片段聚成“视觉行簇”（兼容 备/注 这类拆行标签），
- * 命中 合计/大写/小写/备注/订单号/纯¥金额 的行簇即截断明细区。
+ * 合计区上沿 y：按同一基线归行，避免密集明细连续落入一个滚动行簇。
+ * 小计、合计等页尾文字不应拼到最后一个商品名称中。
  */
 function totalsCutY(items, headerY) {
   const region = items.filter((it) => it.y <= headerY - 2).sort((a, b) => b.y - a.y);
   let cluster = [];
-  let minY = Infinity;
   const test = () => {
     if (!cluster.length) return false;
-    const text = cluster.map((r) => r.str).join('').replace(/\s/g, '');
+    const text = [...cluster].sort((a,b)=>a.x-b.x).map((r) => r.str).join('').replace(/\s/g, '');
     const raw = cluster.map((r) => r.str).join(' ').trim();
     const hasStar = cluster.some((r) => /^\*/.test(r.str.trim()));
-    if (!hasStar && /价\s*税\s*合\s*计|[（(]大\s*写|[（(]小\s*写|备\s*注|开\s*票\s*人|收\s*款\s*人|复\s*核|订\s*单\s*号|合\s*计/.test(text)) {
+    if (!hasStar && (/价税合计|[（(]大写|[（(]小写|备注|开票人|收款人|复核|订单号/.test(text) || /^(?:本页)?(?:小计|合计)(?=[¥￥+\-\d.,：:]|$)/.test(text))) {
       return true;
     }
     return /^([¥￥]\s*[\d,.]+\s*)+$/.test(raw);
   };
   for (const it of region) {
-    if (cluster.length && it.y < minY - 20) {
-      if (test()) return Math.max(...cluster.map((r) => r.y)) + 8;
+    if (cluster.length && it.y < cluster[0].y - 3) {
+      if (test()) return Math.max(...cluster.map((r) => r.y)) + 3;
       cluster = [];
-      minY = Infinity;
     }
     cluster.push(it);
-    minY = Math.min(minY, it.y);
   }
-  if (test()) return Math.max(...cluster.map((r) => r.y)) + 8;
+  if (test()) return Math.max(...cluster.map((r) => r.y)) + 3;
   return -Infinity;
 }
 

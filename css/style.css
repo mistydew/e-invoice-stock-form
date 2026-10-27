@@ -100,8 +100,10 @@ td input:focus { outline: none; border-color: var(--brand); background: #fff; }
 td input[readonly] { color: var(--muted); cursor: default; }
 td.num input { text-align: right; min-width: 62px; }
 td.name input { min-width: 220px; }
-#tbl td:first-child input { min-width: 100px; }
-#tbl td:nth-child(7) input { min-width: 145px; }
+#tbl input[data-field="dateISO"] { min-width: 100px; }
+#tbl input[data-field="price"] { min-width: 145px; }
+#tbl input.invalid-number { border-color: var(--danger); background: #fff1f2; }
+.issue-link { display: block; border: 0; padding: 5px 0; color: inherit; background: transparent; text-align: left; cursor: pointer; font: inherit; text-decoration: underline; }
 .rowdel { color: var(--danger); cursor: pointer; border: none; background: none; font-size: 15px; }
 .inline { margin-left: 14px; font-size: 13px; color: var(--muted); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 18px; }
@@ -126,6 +128,7 @@ footer a { color: var(--accent); }
   position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
   background: #111827; color: #fff; border-radius: 999px; padding: 10px 22px;
   font-size: 14px; opacity: .95; z-index: 99;
+  max-width: calc(100vw - 32px); width: max-content; white-space: normal;
 }
 @media (max-width: 640px) {
   .top h1 { font-size: 20px; }
